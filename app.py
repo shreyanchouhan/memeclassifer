@@ -1,10 +1,15 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 import os
 from datetime import datetime
 import json
-import cv2
+import torch
+import torch.nn.functional as F
+from torchvision import transforms
+
+# Import CNN model
+from cnn_model import MemeBullyCNN
 
 # Page config
 st.set_page_config(
@@ -23,10 +28,79 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Load trained model
+@st.cache_resource
+def load_model():
+    """Load the trained CNN model"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = MemeBullyCNN(num_classes=2, pretrained=False)
+
+    # Try to load trained model
+    model_path = 'models/best_model.pth'
+    if os.path.exists(model_path):
+        try:
+            model.load_state_dict(torch.load(model_path, map_location=device))
+            model = model.to(device)
+            model.eval()
+            return model, device, True
+        except Exception as e:
+            st.warning(f"⚠️ Could not load trained model: {e}")
+            return model, device, False
+    else:
+        return model, device, False
+
+
+def classify_meme(image, model, device):
+    """Classify a meme using the CNN model"""
+
+    # Preprocess image
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+
+    # Convert PIL image to tensor
+    img_tensor = transform(image).unsqueeze(0).to(device)
+
+    # Get prediction
+    with torch.no_grad():
+        outputs = model(img_tensor)
+        probabilities = F.softmax(outputs, dim=1)
+        confidence, predicted = torch.max(probabilities, 1)
+
+    # Convert to numpy
+    confidence = confidence.cpu().numpy()[0]
+    predicted = predicted.cpu().numpy()[0]
+
+    # Get both class probabilities
+    probs = probabilities.cpu().numpy()[0]
+    non_bully_prob = probs[0]
+    bully_prob = probs[1]
+
+    return predicted, confidence, non_bully_prob, bully_prob
+
+
 # Title
 st.markdown('<div class="header">🎭 Meme Bully Classifier</div>', unsafe_allow_html=True)
 st.markdown("Upload a meme → Get Classification → Rate it")
 st.markdown("---")
+
+# Load model
+model, device, model_loaded = load_model()
+
+if not model_loaded:
+    st.warning("⚠️ No trained model found! Train the model first:")
+    st.code("python train_cnn.py", language="bash")
+    st.info("""
+    Steps to train:
+    1. Add images to: data/bully/ and data/non_bully/
+    2. Run: python train_cnn.py
+    3. Reload this page
+    """)
 
 # Create columns
 col1, col2 = st.columns([1, 1], gap="large")
@@ -37,7 +111,7 @@ with col1:
     uploaded_file = st.file_uploader("Choose image", type=["jpg", "jpeg", "png", "gif", "bmp"])
 
     if uploaded_file:
-        image = Image.open(uploaded_file)
+        image = Image.open(uploaded_file).convert('RGB')
         st.image(image, use_column_width=True)
         img_w, img_h = image.size
         st.caption(f"Size: {img_w}x{img_h}px")
@@ -46,41 +120,42 @@ with col1:
 with col2:
     st.subheader("📊 Results")
 
-    if uploaded_file:
-        # Analyze image
-        image_array = np.array(Image.open(uploaded_file).convert('RGB'))
+    if uploaded_file and model_loaded:
+        try:
+            # Classify
+            predicted, confidence, non_bully_prob, bully_prob = classify_meme(image, model, device)
 
-        # Simple heuristics (no trained model needed)
-        brightness = np.mean(image_array)
-        contrast = np.std(image_array)
-        color_variance = np.var(image_array)
+            is_bully = predicted == 1
 
-        # Calculate bully score (0-1)
-        bully_score = (brightness / 255) * 0.3 + (contrast / 100) * 0.4 + (color_variance / 10000) * 0.3
-        bully_score = max(0, min(1, bully_score))  # Clamp between 0-1
+            # Display result
+            result_class = "🚨 BULLY" if is_bully else "✅ NON-BULLY"
+            result_html = f"""
+            <div class="{'bully-result' if is_bully else 'non-bully-result'}">
+                <h2>{result_class}</h2>
+                <p style="font-size: 1.2rem; margin: 0.5rem 0;">
+                    <strong>Confidence: {confidence*100:.1f}%</strong>
+                </p>
+            </div>
+            """
+            st.markdown(result_html, unsafe_allow_html=True)
 
-        is_bully = bully_score > 0.5
+            # Scores
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("🚨 Bully Score", f"{bully_prob*100:.1f}%")
+            with col_b:
+                st.metric("✅ Non-Bully Score", f"{non_bully_prob*100:.1f}%")
 
-        # Display result
-        result_class = "BULLY 🚨" if is_bully else "NON-BULLY ✅"
-        result_html = f"""
-        <div class="{'bully-result' if is_bully else 'non-bully-result'}">
-            <h2>{result_class}</h2>
-            <p style="font-size: 1.2rem; margin: 0.5rem 0;">
-                <strong>Confidence: {max(bully_score, 1-bully_score)*100:.1f}%</strong>
-            </p>
-        </div>
-        """
-        st.markdown(result_html, unsafe_allow_html=True)
+            st.progress(bully_prob if is_bully else non_bully_prob)
 
-        # Scores
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.metric("🚨 Bully Score", f"{bully_score*100:.1f}%")
-        with col_b:
-            st.metric("✅ Non-Bully Score", f"{(1-bully_score)*100:.1f}%")
-
-        st.progress(bully_score if is_bully else 1-bully_score)
+        except Exception as e:
+            st.error(f"❌ Classification error: {e}")
+    elif uploaded_file and not model_loaded:
+        st.error("❌ Model not trained yet. Please train first.")
+    elif uploaded_file:
+        st.info("Waiting for image...")
+    else:
+        st.info("👆 Upload a meme to get started!")
 
 # Ratings
 st.markdown("---")
@@ -103,7 +178,7 @@ comments = st.text_area("Comments", height=80)
 
 # Submit
 st.markdown("---")
-if uploaded_file:
+if uploaded_file and model_loaded:
     if st.button("✅ Save Results", use_container_width=True):
         # Save
         os.makedirs("results", exist_ok=True)
@@ -112,7 +187,9 @@ if uploaded_file:
             "timestamp": datetime.now().isoformat(),
             "filename": uploaded_file.name,
             "classification": "BULLY" if is_bully else "NON-BULLY",
-            "confidence": float(max(bully_score, 1-bully_score)),
+            "confidence": float(confidence),
+            "bully_score": float(bully_prob),
+            "non_bully_score": float(non_bully_prob),
             "ratings": {
                 "humor": int(humor),
                 "offensiveness": int(offense),
@@ -131,7 +208,10 @@ if uploaded_file:
         st.success("✅ Saved!")
         st.balloons()
 else:
-    st.info("👆 Upload a meme to get started!")
+    if not model_loaded:
+        st.warning("⚠️ Train the model first to save results")
+    else:
+        st.info("👆 Upload a meme to save results!")
 
 # Footer
 st.markdown("---")
@@ -139,5 +219,6 @@ st.markdown("""
 <div style="text-align: center; color: gray; font-size: 0.85rem;">
     <p><strong>🎓 Meme Bully Classification System</strong></p>
     <p style="font-size: 0.8rem;">Team: Shreyan Chouhan, Dhruv Garg, Dibya | IIT Guwahati</p>
+    <p style="font-size: 0.75rem;">Deep Learning Course Project | CNN-based Classification</p>
 </div>
 """, unsafe_allow_html=True)
