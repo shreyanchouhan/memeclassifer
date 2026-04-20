@@ -90,6 +90,19 @@ streamlit run app.py
 
 ---
 
+---
+
+## Team
+
+**Project by:**
+- Shreyan Chouhan
+- Dhruv Garg  
+- Dibya
+
+IIT Guwahati
+
+---
+
 **Questions?** Check README.md in the folder
 
 **Enjoy! 🚀**
