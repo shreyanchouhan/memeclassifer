@@ -137,6 +137,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: gray; font-size: 0.85rem;">
-    <p><strong>🎓 Meme Bully Classification</strong> | Shreyan Chouhan | IIT Guwahati</p>
+    <p><strong>🎓 Meme Bully Classification System</strong> | Shreyan Chouhan (220101031) | IIT Guwahati</p>
 </div>
 """, unsafe_allow_html=True)

@@ -1,8 +1,7 @@
 # 🎭 Meme Bullying Classification System
 
 **Course Project: IIT Guwahati**  
-**Author:** Shreyan Chouhan (220101031)  
-**Supervisor:** Dr. Khushraj Nanik Madnani
+**Author:** Shreyan Chouhan (220101031)
 
 ---
 
